@@ -359,8 +359,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(help_text, parse_mode='Markdown')
 
+# Обработка ошибок
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.error(f"Ошибка: {context.error}")
+
 # Основная функция
-async def main():
+def main():
     # Инициализация базы данных
     init_db()
     
@@ -376,9 +380,14 @@ async def main():
     application.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_to_main$"))
     application.add_handler(CallbackQueryHandler(help_command, pattern="^help$"))
     
+    # Обработчик ошибок
+    application.add_error_handler(error_handler)
+    
     # Запуск бота
     logging.info("🤖 Бот запускается...")
-    await application.run_polling()
+    
+    # Для Render используем polling
+    application.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
