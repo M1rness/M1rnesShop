@@ -1,2 +1,3 @@
 #!/bin/bash
-python main.py
+echo "🚀 Starting Telegram Bot..."
+python3 main.py
