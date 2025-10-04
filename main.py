@@ -5,7 +5,7 @@ import random
 import asyncio
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 # Настройка логирования
 logging.basicConfig(
@@ -360,6 +360,245 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(help_text, parse_mode='Markdown')
 
+# 🔐 АДМИН КОМАНДЫ
+
+# Команда /admin - только для владельца
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    keyboard = [
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("📋 Все заказы", callback_data="admin_orders")],
+        [InlineKeyboardButton("✅ Завершить заказ", callback_data="admin_complete")],
+        [InlineKeyboardButton("🚫 Отменить заказ", callback_data="admin_cancel")],
+        [InlineKeyboardButton("🔄 Главное меню", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🔐 **Панель администратора**\n\n"
+        "Выберите действие:",
+        reply_markup=reply_markup
+    )
+
+# Статистика
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    conn = sqlite3.connect('stars.db')
+    cursor = conn.cursor()
+    
+    # Общая статистика
+    cursor.execute('SELECT COUNT(*) FROM orders')
+    total_orders = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM orders WHERE status = "completed"')
+    completed_orders = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM orders WHERE status = "pending"')
+    pending_orders = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM orders WHERE status = "cancelled"')
+    cancelled_orders = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT SUM(price) FROM orders WHERE status = "completed"')
+    total_revenue = cursor.fetchone()[0] or 0
+    
+    # Статистика по пользователям
+    cursor.execute('SELECT COUNT(DISTINCT user_id) FROM orders')
+    unique_users = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    stats_text = (
+        f"📊 **Статистика магазина**\n\n"
+        f"📦 Всего заказов: {total_orders}\n"
+        f"✅ Выполнено: {completed_orders}\n"
+        f"⏳ Ожидают: {pending_orders}\n"
+        f"❌ Отменено: {cancelled_orders}\n"
+        f"💰 Общая выручка: {total_revenue} руб\n"
+        f"👥 Уникальных пользователей: {unique_users}\n"
+        f"👑 Админов: {len(ADMIN_IDS)}"
+    )
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_back")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(stats_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+# Просмотр всех заказов
+async def admin_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    conn = sqlite3.connect('stars.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT order_number, user_name, user_username, stars, price, status, bank_selected, created_at 
+        FROM orders 
+        ORDER BY created_at DESC 
+        LIMIT 20
+    ''')
+    orders = cursor.fetchall()
+    conn.close()
+    
+    if not orders:
+        await query.edit_message_text("📭 Заказов пока нет")
+        return
+    
+    orders_text = "📋 **Последние 20 заказов:**\n\n"
+    
+    for order in orders:
+        order_number, user_name, username, stars, price, status, bank, created_at = order
+        
+        status_icons = {
+            'completed': '✅',
+            'cancelled': '❌', 
+            'pending': '⏳'
+        }
+        
+        bank_name = BANK_DETAILS.get(bank, {}).get('name', 'Не выбран')
+        
+        orders_text += (
+            f"{status_icons.get(status, '⚪')} Заказ #{order_number}\n"
+            f"👤 {user_name} (@{username if username else 'нет'})\n"
+            f"⭐ {stars} Stars - {price} руб\n"
+            f"🏦 {bank_name}\n"
+            f"📊 {status} | {created_at[:16]}\n\n"
+        )
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад в админку", callback_data="admin_back")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(orders_text, reply_markup=reply_markup)
+
+# Завершить заказ
+async def admin_complete_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data['admin_action'] = 'complete'
+    
+    await query.edit_message_text(
+        "✅ **Завершение заказа**\n\n"
+        "Введите номер заказа для завершения:",
+        parse_mode='Markdown'
+    )
+
+# Отменить заказ  
+async def admin_cancel_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data['admin_action'] = 'cancel'
+    
+    await query.edit_message_text(
+        "🚫 **Отмена заказа**\n\n"
+        "Введите номер заказа для отмены:",
+        parse_mode='Markdown'
+    )
+
+# Обработка текстовых команд админа
+async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    
+    text = update.message.text.strip()
+    
+    # Проверяем, является ли текст номером заказа
+    if text.isdigit():
+        order_number = int(text)
+        action = context.user_data.get('admin_action')
+        
+        conn = sqlite3.connect('stars.db')
+        cursor = conn.cursor()
+        
+        # Получаем информацию о заказе
+        cursor.execute('SELECT user_id, status, stars, user_name FROM orders WHERE order_number = ?', (order_number,))
+        order = cursor.fetchone()
+        
+        if not order:
+            await update.message.reply_text(f"❌ Заказ #{order_number} не найден")
+            return
+        
+        user_id, current_status, stars, user_name = order
+
+        if action == 'complete':
+            if current_status == 'completed':
+                await update.message.reply_text(f"⚠️ Заказ #{order_number} уже завершен")
+                return
+                
+            # Обновляем статус
+            cursor.execute('UPDATE orders SET status = "completed" WHERE order_number = ?', (order_number,))
+            conn.commit()
+            
+            # Уведомляем пользователя
+            try:
+                await context.bot.send_message(
+                    user_id,
+                    f"🎉 **Ваш заказ завершен!**\n\n"
+                    f"Заказ #{order_number} на {stars} Stars выполнен!\n"
+                    f"Stars должны прийти в течение 1-2 минут.\n\n"
+                    f"Спасибо за покупку! ❤️"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
+            
+            await update.message.reply_text(f"✅ Заказ #{order_number} завершен. Пользователь уведомлен.")
+            
+        elif action == 'cancel':
+            if current_status == 'cancelled':
+                await update.message.reply_text(f"⚠️ Заказ #{order_number} уже отменен")
+                return
+                
+            # Обновляем статус
+            cursor.execute('UPDATE orders SET status = "cancelled" WHERE order_number = ?', (order_number,))
+            conn.commit()
+            
+            # Уведомляем пользователя
+            try:
+                await context.bot.send_message(
+                    user_id,
+                    f"❌ **Ваш заказ отменен**\n\n"
+                    f"Заказ #{order_number} отменен администратором.\n"
+                    f"Если вы уже оплатили заказ, средства будут возвращены.\n\n"
+                    f"По вопросам обращайтесь к @M1rnes"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
+            
+            await update.message.reply_text(f"🚫 Заказ #{order_number} отменен. Пользователь уведомлен.")
+        
+        conn.close()
+        context.user_data.pop('admin_action', None)
+    else:
+        await update.message.reply_text("❌ Введите корректный номер заказа (только цифры)")
+
+# Назад в админ панель
+async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("📋 Все заказы", callback_data="admin_orders")],
+        [InlineKeyboardButton("✅ Завершить заказ", callback_data="admin_complete")],
+        [InlineKeyboardButton("🚫 Отменить заказ", callback_data="admin_cancel")],
+        [InlineKeyboardButton("🔄 Главное меню", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "🔐 **Панель администратора**\n\n"
+        "Выберите действие:",
+        reply_markup=reply_markup
+    )
+
 # Обработка ошибок
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}")
@@ -372,14 +611,25 @@ def main():
     # Создание приложения
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Обработчики команд
+    # Обычные обработчики
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("admin", admin_panel))  # 🔐 Новая команда!
     application.add_handler(CallbackQueryHandler(show_packages, pattern="^buy_stars$"))
     application.add_handler(CallbackQueryHandler(select_bank, pattern="^package_"))
     application.add_handler(CallbackQueryHandler(create_order, pattern="^bank_"))
     application.add_handler(CallbackQueryHandler(my_orders, pattern="^my_orders$"))
     application.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_to_main$"))
     application.add_handler(CallbackQueryHandler(help_command, pattern="^help$"))
+    
+    # 🔐 Админ обработчики
+    application.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
+    application.add_handler(CallbackQueryHandler(admin_orders, pattern="^admin_orders$"))
+    application.add_handler(CallbackQueryHandler(admin_complete_order, pattern="^admin_complete$"))
+    application.add_handler(CallbackQueryHandler(admin_cancel_order, pattern="^admin_cancel$"))
+    application.add_handler(CallbackQueryHandler(admin_back, pattern="^admin_back$"))
+    
+    # Обработчик текстовых команд админа
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_handler))
     
     # Обработчик ошибок
     application.add_error_handler(error_handler)
