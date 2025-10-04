@@ -12,6 +12,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 # Твой токен
 BOT_TOKEN = "8419033501:AAECCXZBqUeHTBs-EvF7dr5bm-mt2Cd6v0Q"
@@ -361,7 +362,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Обработка ошибок
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.error(f"Ошибка: {context.error}")
+    logger.error(f"Ошибка: {context.error}")
 
 # Основная функция
 def main():
@@ -384,9 +385,7 @@ def main():
     application.add_error_handler(error_handler)
     
     # Запуск бота
-    logging.info("🤖 Бот запускается...")
-    
-    # Для Render используем polling
+    logger.info("🤖 Бот запускается...")
     application.run_polling()
 
 if __name__ == '__main__':
