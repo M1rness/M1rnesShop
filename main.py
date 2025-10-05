@@ -1,4 +1,4 @@
-import os
+import o
 import logging
 import sqlite3
 import random
