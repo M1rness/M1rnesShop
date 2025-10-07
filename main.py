@@ -17,7 +17,7 @@ logging.basicConfig(
 )
 
 # Твой токен
-BOT_TOKEN = "8419033501:AAECCXZBqUeHTBs-EvF7dr5bm-mt2Cd6vQQ"
+BOT_TOKEN = "8419033501:AAECCXZBqUeHTBs-EvF7dr5bm-mt2Cd6v0Q"
 
 # Твой ID админа
 ADMIN_IDS = [7871625571]
